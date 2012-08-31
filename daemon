@@ -1,0 +1,104 @@
+#!/usr/bin/python
+# vim: set expandtab:
+# vim: set tabstop=4:
+# vim: set autoindent:
+
+import iptc
+import time
+import sqlite3
+
+# Connect to SQLite.
+conn = sqlite3.connect('data.db')
+
+class InternalNetwork(object):
+    """Describes an internal network where quota counting should occur."""
+    def __init__(self, interface):
+        self._interface = interface
+        self._computers = list()
+        pass
+
+    def append(self, com):
+        self._computers.append(com)
+
+    def apply_rules(self, chain):
+        chain.flush()
+        for i in self._computers:
+            # Define target chain.
+            target_chain = iptc.Chain(chain.table, i.ip + "-COUNTER")
+            if (chain.table.is_chain(target_chain)):
+                target_chain.flush()
+                chain.table.delete_chain(target_chain)
+            chain.table.create_chain(target_chain)
+            # Define accept rule.
+            accept_rule = iptc.Rule()
+            accept_rule.target = iptc.Target(accept_rule, "ACCEPT")
+            target_chain.append_rule(accept_rule)
+            # Define input rule.
+            in_rule = iptc.Rule()
+            in_rule.in_interface = "*"
+            in_rule.out_interface = "*"
+            in_rule.src = i.ip + "/255.255.255.255"
+            in_rule.dst = "0.0.0.0/0.0.0.0"
+            in_rule.target = iptc.Target(in_rule, i.ip + "-COUNTER")
+            chain.append_rule(in_rule)
+            # Define output rule.
+            out_rule = iptc.Rule()
+            out_rule.in_interface = "*"
+            out_rule.out_interface = "*"
+            out_rule.src = "0.0.0.0/0.0.0.0"
+            out_rule.dst = i.ip + "/255.255.255.255"
+            out_rule.target = iptc.Target(out_rule, i.ip + "-COUNTER")
+            chain.append_rule(out_rule)
+        # Define drop rule.
+        drop_rule = iptc.Rule()
+        drop_rule.target = iptc.Target(drop_rule, "DROP")
+        chain.append_rule(drop_rule)
+
+class Computer(object):
+    """Describes a computer in the network."""
+    def __init__(self, ip):
+        self.ip = ip
+
+def print_rule(rule):
+    print "{0} {1} {2} {3} {4} {5} {6}".format(
+        rule.src,
+        rule.dst,
+        rule.in_interface,
+        rule.out_interface,
+        rule.fragment,
+        rule.protocol,
+        rule.get_counters()
+        )
+
+# Set autocommit to false.
+iptc.TABLE_FILTER.autocommit = False
+
+# Define machines.
+first_pc = Computer("192.168.1.84")
+second_pc = Computer("192.168.1.56")
+internal_network = InternalNetwork("eth0")
+internal_network.append(first_pc)
+internal_network.append(second_pc)
+
+# Main loop.
+while True:
+    # Monitor IP tables and quotas.
+    print "Applying rules in FORWARD chain:"
+    chain = iptc.Chain(iptc.TABLE_FILTER, "FORWARD")
+    internal_network.apply_rules(chain)
+    for i in chain.rules:
+        print_rule(i)
+    try:
+        iptc.TABLE_FILTER.commit()
+    except iptc.IPTCError:
+        print "Unable to apply rules!"
+
+    # Sleep for 2 seconds.
+    try:
+        time.sleep(2);
+    except KeyboardInterrupt:
+        print ""
+        break
+
+# Disconnect from SQLite.
+conn.close()

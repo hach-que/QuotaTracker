@@ -1,0 +1,46 @@
+#!/usr/bin/python
+# vim: set expandtab:
+# vim: set tabstop=4:
+# vim: set autoindent:
+
+import sqlite3
+import readline
+import atexit
+from commands import *
+
+# Connect to SQLite.
+conn = sqlite3.connect('data.db')
+atexit.register(conn.close)
+
+# Try and read history file.
+import os
+histfile = os.path.join(os.path.expanduser("~"), ".filterhist")
+try:
+    readline.read_history_file(histfile)
+except IOError:
+    pass
+atexit.register(readline.write_history_file, histfile)
+del os, histfile
+
+# Make a list of commands.
+commands = {}
+commands["help"] = HelpCommand()
+commands["network"] = NetworkCommand()
+commands["reset"] = ResetCommand()
+
+# Main loop.
+print "Quota management system - control program"
+while True:
+    line = raw_input("> ")
+    if (line == ""):
+        continue
+    args = line.split(' ');
+    if (len(args) == 0):
+        continue
+    cmd = args.pop(0)
+    if (cmd.lower() == "quit"):
+        break
+    if (cmd.lower() in commands):
+        commands[cmd.lower()].handle(conn, args)
+    else:
+        print "Unknown command.  See 'help'."
