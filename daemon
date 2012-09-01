@@ -6,9 +6,15 @@
 import iptc
 import time
 import sqlite3
+import atexit
+import subprocess
+import os
+os.chdir("/srv/filter")
+del os
 
 # Connect to SQLite.
 conn = sqlite3.connect('data.db')
+atexit.register(conn.close)
 
 class InternalNetwork(object):
     """Describes an internal network where quota counting should occur."""
@@ -19,6 +25,9 @@ class InternalNetwork(object):
 
     def append(self, com):
         self._computers.append(com)
+
+    def rescan_quotas(self, chain):
+        pass
 
     def apply_rules(self, chain):
         chain.flush()
@@ -54,51 +63,159 @@ class InternalNetwork(object):
         drop_rule.target = iptc.Target(drop_rule, "DROP")
         chain.append_rule(drop_rule)
 
+class DatabaseNetwork(object):
+    def __init__(self):
+        pass
+
+    def get_computers(self):
+        c = conn.cursor()
+        import socket
+        l = list()
+        for row in c.execute("""SELECT a.hostname, a.person, a.quota, u.bytes
+                                FROM computers AS a
+                                LEFT JOIN usage AS u
+                                    ON u.computer_id = a.rowid
+                                    AND u.end_time > ? - a.period""", (time.time(),)):
+            try:
+                hostname = row[0]
+                person = row[1]
+                quota = row[2]
+                usage = row[3]
+                if usage == None:
+                    usage = 0
+                over = usage > quota
+
+                v = socket.gethostbyname(hostname)
+                if (person != None and person.strip != ""):
+                    l.append((v, person.upper(), hostname, over))
+                else:
+                    l.append((v, v, hostname, over))
+            except Exception:
+                l.append(("UNKNOWN", "UNKNOWN", hostname, over))
+                pass
+        del socket
+        c.close()
+        return l
+
+    def rescan_quotas(self, chain):
+        chain.table.refresh()
+        c = conn.cursor()
+        l = list()
+        for row in c.execute("SELECT rowid, hostname, person, period, quota FROM computers"):
+            l.append((row[0], row[1], row[2], row[3], row[4]))
+        for i in l:
+            rowid = i[0]
+            hostname = i[1]
+            person = i[2]
+            period = i[3]
+            quota = i[4]
+            # Fetch the current used amount according to iptables.
+            target_name = str(hostname.replace(".", "-").upper()) + "-COUNTER"
+            target_chain = iptc.Chain(chain.table, target_name)
+            if (not chain.table.is_chain(target_chain)):
+                continue
+            if (len(target_chain.rules) < 1):
+                continue
+            counters = target_chain.rules[0].get_counters()
+            if counters != None:
+                usage = counters[1]
+                target_chain.zero_counters()
+            else:
+                continue
+            if usage == 0:
+                continue
+            # Find an existing usage block to fill up if possible.
+            now = time.time()
+            result = c.execute("SELECT rowid FROM usage WHERE computer_id == ? AND end_time > ?", (rowid, now)).fetchone();
+            if (result == None):
+                # We need to create a new usage entry using the appropriate quota information.
+                c.execute("INSERT INTO usage (computer_id, end_time, bytes) VALUES (?, ?, ?)", (rowid, now + period, usage))
+            else:
+                # We need to update the existing record.
+                c.execute("UPDATE usage SET bytes = bytes + ? WHERE rowid = ?", (usage, result[0]))
+            conn.commit()
+
+    def apply_rules(self, chain):
+        chain.flush()
+        computers = self.get_computers()
+        for i in computers:
+            ip = i[0]
+            person = i[1]
+            hostname = i[2]
+            over = i[3]
+
+            # Define target chain.
+            target_name = str(hostname.replace(".", "-").upper()) + "-COUNTER"
+            target_chain = iptc.Chain(chain.table, target_name)
+            if (not chain.table.is_chain(target_chain)):
+                chain.table.create_chain(target_chain)
+                continue
+            target_chain.flush()
+            # Define mark (over-usage) rule.
+            # FIXME: Spent the last two days trying to get the next iptc
+            #        extensions working and they refuse to work properly.
+            #        This does it the old fashioned way.
+            if over:
+                chain.table.refresh()
+                subprocess.call(["iptables", "-t", "mangle", "-A", target_name, "-j", "MARK", "--set-mark", "10"])
+                #mark_rule = iptc.Rule()
+                #mark_rule.target = iptc.Target(mark_rule, "MARK", revision=2)
+                #mark_rule.target.set_xmark = "10"
+                #target_chain.append_rule(mark_rule)
+                chain.table.refresh()
+            # Define accept rule.
+            accept_rule = iptc.Rule()
+            accept_rule.target = iptc.Target(accept_rule, "ACCEPT")
+            target_chain.append_rule(accept_rule)
+            # Define input rule.
+            in_rule = iptc.Rule()
+            in_rule.in_interface = "*"
+            in_rule.out_interface = "*"
+            in_rule.src = ip + "/255.255.255.255"
+            in_rule.dst = "0.0.0.0/0.0.0.0"
+            in_rule.target = iptc.Target(in_rule, target_name, table=iptc.TABLE_MANGLE)
+            chain.append_rule(in_rule)
+            # Define output rule.
+            out_rule = iptc.Rule()
+            out_rule.in_interface = "*"
+            out_rule.out_interface = "*"
+            out_rule.src = "0.0.0.0/0.0.0.0"
+            out_rule.dst = ip + "/255.255.255.255"
+            out_rule.target = iptc.Target(out_rule, target_name, table=iptc.TABLE_MANGLE)
+            chain.append_rule(out_rule)
+        # Define drop rule.
+        drop_rule = iptc.Rule()
+        drop_rule.target = iptc.Target(drop_rule, "DROP")
+        chain.append_rule(drop_rule)
+
 class Computer(object):
     """Describes a computer in the network."""
     def __init__(self, ip):
         self.ip = ip
 
-def print_rule(rule):
-    print "{0} {1} {2} {3} {4} {5} {6}".format(
-        rule.src,
-        rule.dst,
-        rule.in_interface,
-        rule.out_interface,
-        rule.fragment,
-        rule.protocol,
-        rule.get_counters()
-        )
-
 # Set autocommit to false.
-iptc.TABLE_FILTER.autocommit = False
+iptc.TABLE_MANGLE.autocommit = True #False
 
 # Define machines.
-first_pc = Computer("192.168.1.84")
-second_pc = Computer("192.168.1.56")
-internal_network = InternalNetwork("eth0")
-internal_network.append(first_pc)
-internal_network.append(second_pc)
+internal_network = DatabaseNetwork()
 
 # Main loop.
 while True:
     # Monitor IP tables and quotas.
-    print "Applying rules in FORWARD chain:"
-    chain = iptc.Chain(iptc.TABLE_FILTER, "FORWARD")
+    chain = iptc.Chain(iptc.TABLE_MANGLE, "FORWARD")
+    internal_network.rescan_quotas(chain)
     internal_network.apply_rules(chain)
-    for i in chain.rules:
-        print_rule(i)
     try:
-        iptc.TABLE_FILTER.commit()
-    except iptc.IPTCError:
-        print "Unable to apply rules!"
+        iptc.TABLE_MANGLE.refresh()
+    except iptc.IPTCError, e:
+        print "Daemon is no longer able to access IPTables."
+        print e
+        exit(1)
 
-    # Sleep for 2 seconds.
+    # Sleep for 1 second.
     try:
-        time.sleep(2);
+        time.sleep(1)
     except KeyboardInterrupt:
         print ""
         break
 
-# Disconnect from SQLite.
-conn.close()

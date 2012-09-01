@@ -1,0 +1,7 @@
+#!/bin/bash
+
+. /srv/filter/tcconfig
+
+# Delete existing rules.
+tc qdisc del dev $DEVICE root
+

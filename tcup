@@ -1,0 +1,16 @@
+#!/bin/bash
+
+. /srv/filter/tcconfig
+
+# Delete existing rules.
+tc qdisc del dev $DEVICE root
+
+# Define the qdisc.
+tc qdisc add dev $DEVICE root handle $QDISC_ID htb
+
+# Define the classes.
+tc class add dev $DEVICE parent $QDISC_ID classid $CLASS_ID htb rate $LIMITED_SPEED
+
+# Define the filter.
+tc filter add dev $DEVICE parent $QDISC_ID protocol ip prio 1 handle $THROTTLE_MARK fw flowid $CLASS_ID
+

@@ -1,0 +1,11 @@
+[Unit]
+Description=QuotaTracker Filtering
+After=tc.service
+
+[Service]
+Type=simple
+ExecStart=/srv/filter/daemon
+WorkingDirectory=/srv/filter
+
+[Install]
+WantedBy=multi-user.target

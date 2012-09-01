@@ -7,6 +7,9 @@ import sqlite3
 import readline
 import atexit
 from commands import *
+import os
+os.chdir("/srv/filter")
+del os
 
 # Connect to SQLite.
 conn = sqlite3.connect('data.db')
@@ -25,13 +28,14 @@ del os, histfile
 # Make a list of commands.
 commands = {}
 commands["help"] = HelpCommand()
-commands["network"] = NetworkCommand()
+commands["computer"] = ComputerCommand()
+commands["quota"] = QuotaCommand()
 commands["reset"] = ResetCommand()
 
 # Main loop.
 print "Quota management system - control program"
 while True:
-    line = raw_input("> ")
+    line = raw_input("> ").strip()
     if (line == ""):
         continue
     args = line.split(' ');
@@ -41,6 +45,8 @@ while True:
     if (cmd.lower() == "quit"):
         break
     if (cmd.lower() in commands):
-        commands[cmd.lower()].handle(conn, args)
+        c = conn.cursor()
+        commands[cmd.lower()].handle(conn, c, args)
+        c.close()
     else:
         print "Unknown command.  See 'help'."

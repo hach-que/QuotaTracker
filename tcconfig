@@ -1,0 +1,15 @@
+#!/bin/bash
+
+# Speed information
+LIMITED_SPEED=128kbit
+
+# Mapping information
+DEVICE=eth0
+QDISC=1
+CLASS=1
+THROTTLE_MARK=10
+
+# IDs
+QDISC_ID=$QDISC:
+CLASS_ID=$QDISC:$CLASS
+CLASS_MINOR=$CLASS

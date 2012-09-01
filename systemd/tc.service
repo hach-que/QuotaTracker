@@ -1,0 +1,12 @@
+[Unit]
+Description=Traffic Control Settings
+After=bridge.service
+
+[Service]
+Type=oneshot
+ExecStart=/srv/filter/tcup
+ExecStop=/srv/filter/tcdown
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

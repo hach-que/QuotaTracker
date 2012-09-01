@@ -1,0 +1,60 @@
+#!/usr/bin/python
+# vim: set expandtab:
+# vim: set tabstop=4:
+# vim: set autoindent:
+
+import iptc
+import time
+import sqlite3
+import atexit
+import os
+os.chdir("/srv/filter")
+del os
+
+# Connect to SQLite.
+conn = sqlite3.connect('data.db')
+atexit.register(conn.close)
+
+def get_computers():
+    c = conn.cursor()
+    import socket
+    l = list()
+    for row in c.execute("""SELECT a.hostname, a.person, a.quota, u.bytes
+                            FROM computers AS a
+                            LEFT JOIN usage AS u
+                                ON u.computer_id = a.rowid
+                                AND u.end_time > ?""", (time.time(),)):
+        try:
+            hostname = row[0]
+            person = row[1]
+            quota = row[2]
+            usage = row[3]
+            if usage == None:
+                usage = 0
+            over = usage > quota
+
+            v = socket.gethostbyname(hostname)
+            if (person != None and person.strip != ""):
+                l.append((v, person.upper(), hostname, over, quota, usage))
+            else:
+                l.append((v, v, hostname, over, quota, usage))
+        except Exception:
+            l.append(("UNKNOWN", "UNKNOWN", hostname, over, quota, usage))
+            pass
+    del socket
+    c.close()
+    return l
+
+computers = get_computers()
+for i in computers:
+    ip = i[0]
+    person = i[1]
+    hostname = i[2]
+    over = i[3]
+    quota = i[4]
+    usage = i[5]
+
+    append = ""
+    if over:
+        append = " (*)"
+    print "%s - %i / %i%s" % (hostname, usage, quota, append)
