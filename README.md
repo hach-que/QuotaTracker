@@ -57,3 +57,33 @@ watch qtusage
 
 If you are not experiencing any throttling, ensure that the `tcconfig` file is set to the
 correct interface (this file also allows you to tweak the throttling speed).
+
+Transparent Tor
+------------------
+QuotaTracker can also enable Tor on a per computer basis.  Ensure you have Tor enabled on
+the box that QuotaTracker is installed on, following the instructions at these URLs:
+
+https://gitweb.torproject.org/tor.git?a=blob_plain;hb=HEAD;f=doc/tor-rpm-creation.txt
+https://trac.torproject.org/projects/tor/wiki/doc/TransparentProxy#AnonymizingMiddlebox
+
+Now when you want, you can enable or disable Tor on a per-computer basis using `qtcontrol`:
+```
+Quota management system - control program
+> tor list
+1 computers using Tor:
+ - james-pc (James)
+6 computers not using Tor:
+ - storm (Nathan)
+ - leigh-pc (Leigh)
+ - peter-pc (Peter)
+ - nathan-laptop (Nathan)
+ - nathan-pc (Nathan)
+ - nathans-ipod (Nathan)
+> tor on james-pc
+Enabled transparent Tor for james-pc.
+Verify by accessing https://check.torproject.org/ from the machine.
+It might take a minute for the changes to apply.
+> tor off james-pc
+Disabled transparent Tor for james-pc.
+It might take a minute for the changes to apply.
+```

@@ -3,11 +3,13 @@
 # vim: set tabstop=4:
 # vim: set autoindent:
 
+from __future__ import division
 import iptc
 import time
 import sqlite3
 import atexit
 import os
+import datetime
 os.chdir("/srv/filter")
 del os
 
@@ -19,7 +21,7 @@ def get_computers():
     c = conn.cursor()
     import socket
     l = list()
-    for row in c.execute("""SELECT a.hostname, a.person, a.quota, u.bytes
+    for row in c.execute("""SELECT a.hostname, a.person, a.quota, a.period, u.bytes, u.end_time
                             FROM computers AS a
                             LEFT JOIN usage AS u
                                 ON u.computer_id = a.rowid
@@ -28,22 +30,38 @@ def get_computers():
             hostname = row[0]
             person = row[1]
             quota = row[2]
-            usage = row[3]
+            period = row[3]
+            usage = row[4]
+            end = row[5]
             if usage == None:
                 usage = 0
             over = usage > quota
 
             v = socket.gethostbyname(hostname)
             if (person != None and person.strip != ""):
-                l.append((v, person.upper(), hostname, over, quota, usage))
+                l.append((v, person.upper(), hostname, over, quota, usage, end, period))
             else:
-                l.append((v, v, hostname, over, quota, usage))
+                l.append((v, v, hostname, over, quota, usage, end, period))
         except Exception:
-            l.append(("UNKNOWN", "UNKNOWN", hostname, over, quota, usage))
+            l.append(("UNKNOWN", "UNKNOWN", hostname, over, quota, usage, end, period))
             pass
     del socket
     c.close()
     return l
+
+def get_byte_suffix(val):
+    bytetype = "b"
+    while val > 1024 and bytetype != "tb":
+        val /= 1024
+        if bytetype == "b":
+            bytetype = "kb"
+        elif bytetype == "kb":
+            bytetype = "mb"
+        elif bytetype == "mb":
+            bytetype = "gb"
+        elif bytetype == "gb":
+            bytetype = "tb"
+    return val, bytetype
 
 computers = get_computers()
 for i in computers:
@@ -53,8 +71,40 @@ for i in computers:
     over = i[3]
     quota = i[4]
     usage = i[5]
+    end = i[6]
+    period = i[7]
 
+    # Determine suffixes
+    oquota = quota
+    ousage = usage
+    quota, qtype = get_byte_suffix(quota)
+    usage, utype = get_byte_suffix(usage)
+
+    # Determine whether usage is projected to be throttled
+    projected = None
+    if not over and end != None and period != 0 and quota != 0:
+        span = time.time() - end + period
+        time_ratio = span / period
+        usage_ratio = ousage / oquota
+        if (time_ratio == 0):
+            ratio = 0
+        ratio = usage_ratio / time_ratio
+        estimated = ratio * oquota
+        if (estimated > oquota):
+            pover = estimated - oquota
+            pover, ptype = get_byte_suffix(pover)
+            projected = "-{:.2f}{}".format(pover, ptype)
+        else:
+            left = oquota - estimated
+            left, ltype = get_byte_suffix(left)
+            projected = "+{:.2f}{}".format(left, ltype)
+
+    # Print output
     append = ""
     if over:
-        append = " (*)"
-    print "%s - %i / %i%s" % (hostname, usage, quota, append)
+        append += " (*)"
+    if projected != None:
+        append += " (" + projected + ")"
+    if end != None:
+        append += " ends at %s" % datetime.datetime.fromtimestamp(end).strftime("%I:%M:%S %p")
+    print "%s - %.2f%s / %.2f%s%s" % (hostname, usage, utype, quota, qtype, append)

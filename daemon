@@ -12,56 +12,14 @@ import os
 os.chdir("/srv/filter")
 del os
 
+### BEGIN TOR CONFIGURATION
+tor_port = 9040
+tor_interface = "br0"
+### END TOR CONFIGURATION
+
 # Connect to SQLite.
 conn = sqlite3.connect('data.db')
 atexit.register(conn.close)
-
-class InternalNetwork(object):
-    """Describes an internal network where quota counting should occur."""
-    def __init__(self, interface):
-        self._interface = interface
-        self._computers = list()
-        pass
-
-    def append(self, com):
-        self._computers.append(com)
-
-    def rescan_quotas(self, chain):
-        pass
-
-    def apply_rules(self, chain):
-        chain.flush()
-        for i in self._computers:
-            # Define target chain.
-            target_chain = iptc.Chain(chain.table, i.ip + "-COUNTER")
-            if (chain.table.is_chain(target_chain)):
-                target_chain.flush()
-                chain.table.delete_chain(target_chain)
-            chain.table.create_chain(target_chain)
-            # Define accept rule.
-            accept_rule = iptc.Rule()
-            accept_rule.target = iptc.Target(accept_rule, "ACCEPT")
-            target_chain.append_rule(accept_rule)
-            # Define input rule.
-            in_rule = iptc.Rule()
-            in_rule.in_interface = "*"
-            in_rule.out_interface = "*"
-            in_rule.src = i.ip + "/255.255.255.255"
-            in_rule.dst = "0.0.0.0/0.0.0.0"
-            in_rule.target = iptc.Target(in_rule, i.ip + "-COUNTER")
-            chain.append_rule(in_rule)
-            # Define output rule.
-            out_rule = iptc.Rule()
-            out_rule.in_interface = "*"
-            out_rule.out_interface = "*"
-            out_rule.src = "0.0.0.0/0.0.0.0"
-            out_rule.dst = i.ip + "/255.255.255.255"
-            out_rule.target = iptc.Target(out_rule, i.ip + "-COUNTER")
-            chain.append_rule(out_rule)
-        # Define drop rule.
-        drop_rule = iptc.Rule()
-        drop_rule.target = iptc.Target(drop_rule, "DROP")
-        chain.append_rule(drop_rule)
 
 class DatabaseNetwork(object):
     def __init__(self):
@@ -71,7 +29,7 @@ class DatabaseNetwork(object):
         c = conn.cursor()
         import socket
         l = list()
-        for row in c.execute("""SELECT a.hostname, a.person, a.quota, u.bytes
+        for row in c.execute("""SELECT a.hostname, a.person, a.quota, u.bytes, a.use_tor
                                 FROM computers AS a
                                 LEFT JOIN usage AS u
                                     ON u.computer_id = a.rowid
@@ -81,17 +39,18 @@ class DatabaseNetwork(object):
                 person = row[1]
                 quota = row[2]
                 usage = row[3]
+                tor = row[4]
                 if usage == None:
                     usage = 0
                 over = usage > quota
 
                 v = socket.gethostbyname(hostname)
                 if (person != None and person.strip != ""):
-                    l.append((v, person.upper(), hostname, over))
+                    l.append((v, person.upper(), hostname, over, tor))
                 else:
-                    l.append((v, v, hostname, over))
+                    l.append((v, v, hostname, over, tor))
             except Exception:
-                l.append(("UNKNOWN", "UNKNOWN", hostname, over))
+                l.append(("UNKNOWN", "UNKNOWN", hostname, over, tor))
                 pass
         del socket
         c.close()
@@ -135,7 +94,7 @@ class DatabaseNetwork(object):
                 c.execute("UPDATE usage SET bytes = bytes + ? WHERE rowid = ?", (usage, result[0]))
             conn.commit()
 
-    def apply_rules(self, chain):
+    def apply_quota_rules(self, chain):
         chain.flush()
         computers = self.get_computers()
         for i in computers:
@@ -188,23 +147,87 @@ class DatabaseNetwork(object):
         drop_rule.target = iptc.Target(drop_rule, "DROP")
         chain.append_rule(drop_rule)
 
+    def apply_tor_rules(self, chain):
+        chain.flush()
+
+        # Define Tor enabled chain.
+        tor_name = "TOR-ENABLED"
+        tor_chain = iptc.Chain(chain.table, tor_name)
+        if (not chain.table.is_chain(tor_chain)):
+            chain.table.create_chain(tor_chain)
+        tor_chain.flush()
+        chain.table.refresh()
+        subprocess.call(["iptables", "-t", "nat", "-A", tor_name, "-i", tor_interface, "-p", "udp", "--dport", "53", "-j", "REDIRECT", "--to-ports", "53"])
+        subprocess.call(["iptables", "-t", "nat", "-A", tor_name, "-i", tor_interface, "-p", "tcp", "--syn", "-j", "REDIRECT", "--to-ports", str(tor_port)])
+        chain.table.refresh()
+
+        # Define Tor disabled chain.
+        normal_name = "TOR-DISABLED"
+        normal_chain = iptc.Chain(chain.table, normal_name)
+        if (not chain.table.is_chain(normal_chain)):
+            chain.table.create_chain(normal_chain)
+        normal_chain.flush()
+        accept_rule = iptc.Rule()
+        accept_rule.target = iptc.Target(accept_rule, "ACCEPT")
+        normal_chain.append_rule(accept_rule)
+
+        computers = self.get_computers()
+        for i in computers:
+            ip = i[0]
+            person = i[1]
+            hostname = i[2]
+            over = i[3]
+            tor = i[4]
+
+            # Define tor target.
+            if tor:
+                target = tor_name
+            else:
+                target = normal_name
+            # Define input rule.
+            in_rule = iptc.Rule()
+            in_rule.in_interface = "*"
+            in_rule.out_interface = "*"
+            in_rule.src = ip + "/255.255.255.255"
+            in_rule.dst = "0.0.0.0/0.0.0.0"
+            in_rule.target = iptc.Target(in_rule, target, table=iptc.TABLE_NAT)
+            chain.append_rule(in_rule)
+            # Define output rule.
+            out_rule = iptc.Rule()
+            out_rule.in_interface = "*"
+            out_rule.out_interface = "*"
+            out_rule.src = "0.0.0.0/0.0.0.0"
+            out_rule.dst = ip + "/255.255.255.255"
+            out_rule.target = iptc.Target(out_rule, target, table=iptc.TABLE_NAT)
+            chain.append_rule(out_rule)
+        # Define drop rule.
+        drop_rule = iptc.Rule()
+        drop_rule.target = iptc.Target(drop_rule, "DROP")
+        chain.append_rule(drop_rule)
+
 class Computer(object):
     """Describes a computer in the network."""
     def __init__(self, ip):
         self.ip = ip
 
 # Set autocommit to false.
-iptc.TABLE_MANGLE.autocommit = True #False
+iptc.TABLE_MANGLE.autocommit = True
+iptc.TABLE_NAT.autocommit = True
 
 # Define machines.
 internal_network = DatabaseNetwork()
 
 # Main loop.
+print "QuotaTracker Daemon"
+print "Tor port: %i" % tor_port
+print "Tor interface: %s" % tor_interface
 while True:
     # Monitor IP tables and quotas.
+    chain = iptc.Chain(iptc.TABLE_NAT, "PREROUTING")
+    internal_network.apply_tor_rules(chain)
     chain = iptc.Chain(iptc.TABLE_MANGLE, "FORWARD")
     internal_network.rescan_quotas(chain)
-    internal_network.apply_rules(chain)
+    internal_network.apply_quota_rules(chain)
     try:
         iptc.TABLE_MANGLE.refresh()
     except iptc.IPTCError, e:

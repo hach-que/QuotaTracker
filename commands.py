@@ -35,7 +35,8 @@ class ResetCommand(Command):
                 hostname TEXT,
                 person TEXT,
                 period INTEGER,
-                quota INTEGER
+                quota INTEGER,
+                use_tor BOOLEAN
             )""")
         c.execute("""
             CREATE TABLE usage
@@ -55,11 +56,14 @@ class ComputerCommand(Command):
             print "delete <hostname> - Remove a computer by interface and hostname."
         elif (args[0].lower() == "list" and len(args) == 1):
             results = list()
-            for i in c.execute("SELECT hostname, person FROM computers"):
+            for i in c.execute("SELECT hostname, person, use_tor FROM computers"):
                 results.append(i)
             print "%i computers configured." % len(results)
             for i in results:
-                print " - %s (%s)" % (i[0], i[1])
+                if i[2]:
+                    print " - %s (%s) VIA TOR" % (i[0], i[1])
+                else:
+                    print " - %s (%s)" % (i[0], i[1])                  
         elif (args[0].lower() == "add" and len(args) == 3):
             hostname = args[1].lower()
             person = args[2]
@@ -67,7 +71,7 @@ class ComputerCommand(Command):
             if (c.fetchone()[0] > 0):
                 print "A computer already exists with hostname %s." % hostname
                 return
-            if (c.execute("INSERT INTO computers (hostname, person, period, quota) VALUES (LOWER(?), ?, ?, ?)", (hostname, person, 0, 0))):
+            if (c.execute("INSERT INTO computers (hostname, person, period, quota, use_tor) VALUES (LOWER(?), ?, ?, ?, ?)", (hostname, person, 0, 0, False))):
                 print "Added computer %s (%s)." % (hostname, person)
                 print "Assigned computer %s a quota of 0 bytes over 0 seconds."
             else:
@@ -87,6 +91,41 @@ class ComputerCommand(Command):
             conn.commit()
         else:
             print "Invalid number of arguments."
+
+# Tor command.
+class TorCommand(Command):
+    def handle(self, conn, c, args):
+        if (len(args) == 0 or args[0].lower() == "help"):
+            print "list - Show status of Tor on computers."
+            print "on <hostname> - Turn transparent Tor on for the specified hostname."
+            print "off <hostname> - Turn transparent Tor off for the specified hostname."
+        elif (args[0].lower() == "list" and len(args) == 1):
+            tor_on = list()
+            tor_off = list()
+            for i in c.execute("SELECT hostname, person, use_tor FROM computers"):
+                if i[2]:
+                    tor_on.append(i)
+                else:
+                    tor_off.append(i)
+            print "%i computers using Tor:" % len(tor_on)
+            for i in tor_on:
+                print " - %s (%s)" % (i[0], i[1])
+            print "%i computers not using Tor:" % len(tor_off)
+            for i in tor_off:
+                print " - %s (%s)" % (i[0], i[1])
+        elif (args[0].lower() == "on" and len(args) == 2):
+            hostname = args[1].lower()
+            print "Enabled transparent Tor for %s." % hostname
+            print "Verify by accessing https://check.torproject.org/ from the machine."
+            print "It might take a minute for the changes to apply."
+            c.execute("UPDATE computers SET use_tor = ? WHERE LOWER(hostname) = ?", (True, hostname))
+            conn.commit()
+        elif (args[0].lower() == "off" and len(args) == 2):
+            hostname = args[1].lower()
+            print "Disabled transparent Tor for %s." % hostname
+            print "It might take a minute for the changes to apply."
+            c.execute("UPDATE computers SET use_tor = ? WHERE LOWER(hostname) = ?", (False, hostname))
+            conn.commit()
 
 # Quota command.
 class QuotaCommand(Command):
@@ -119,6 +158,6 @@ class HelpCommand(Command):
         print "reset - Clears and recreates the database."
         print "computer - Control computers."
         print "quota - Control quotas."
-        print "usage - Display and examine usage."
+        print "tor - Configure transparent Tor." 
         print "help - This help."
         print "quit - Quits the control program."

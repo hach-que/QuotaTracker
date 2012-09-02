@@ -30,6 +30,7 @@ commands = {}
 commands["help"] = HelpCommand()
 commands["computer"] = ComputerCommand()
 commands["quota"] = QuotaCommand()
+commands["tor"] = TorCommand()
 commands["reset"] = ResetCommand()
 
 # Main loop.
