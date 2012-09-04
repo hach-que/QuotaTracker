@@ -133,6 +133,7 @@ class QuotaCommand(Command):
         if (len(args) == 0 or args[0].lower() == "help"):
             print "list - Show quotas assigned to computers."
             print "set <period> <amount> - Set quotas for all computers."
+            print "set <hostname> <period> <amount> - Set quota for a single computer specified by hostname."
             print "reset - Reset the quota timers, forcing a new quota cycle to begin."
         elif (args[0].lower() == "list" and len(args) == 1):
             results = list()
@@ -146,6 +147,13 @@ class QuotaCommand(Command):
             quota = int(args[2])
             print "Assigned all computers a quota of %i bytes over %i seconds." % (quota, period)
             c.execute("UPDATE computers SET period = ?, quota = ?", (period, quota))
+            conn.commit()
+        elif (args[0].lower() == "set" and len(args) == 4):
+            hostname = args[1].lower()
+            period = int(args[2])
+            quota = int(args[3])
+            print "Assigned %s a quota of %i bytes over %i seconds." % (hostname, quota, period)
+            c.execute("UPDATE computers SET period = ?, quota = ? WHERE LOWER(hostname) = ?", (period, quota, hostname))
             conn.commit()
         elif (args[0].lower() == "reset" and len(args) == 1):
             c.execute("UPDATE usage SET end_time = ? WHERE end_time > ?", (time.time(), time.time()))

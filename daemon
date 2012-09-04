@@ -44,13 +44,14 @@ class DatabaseNetwork(object):
                     usage = 0
                 over = usage > quota
 
-                v = socket.gethostbyname(hostname)
-                if (person != None and person.strip != ""):
-                    l.append((v, person.upper(), hostname, over, tor))
-                else:
-                    l.append((v, v, hostname, over, tor))
+                v = socket.gethostbyname_ex(hostname)[2]
+                for k in v:
+                    if (person != None and person.strip != ""):
+                        l.append((k, person.upper(), hostname, over, tor))
+                    else:
+                        l.append((k, k, hostname, over, tor))
             except Exception:
-                l.append(("UNKNOWN", "UNKNOWN", hostname, over, tor))
+                #l.append(("UNKNOWN", "UNKNOWN", hostname, over, tor))
                 pass
         del socket
         c.close()
@@ -96,6 +97,15 @@ class DatabaseNetwork(object):
 
     def apply_quota_rules(self, chain):
         chain.flush()
+
+        # Always permit DHCP; otherwise computers can not get
+        # new IP addresses.
+        chain.table.refresh()
+        subprocess.call(["iptables", "-t", "mangle", "-A", chain.name, "-p", "udp",
+            "--dport", "67:68", "--sport", "67:68", "-j", "ACCEPT"])
+        chain.table.refresh()
+
+        # Add rules for computers.
         computers = self.get_computers()
         for i in computers:
             ip = i[0]
@@ -149,6 +159,13 @@ class DatabaseNetwork(object):
 
     def apply_tor_rules(self, chain):
         chain.flush()
+
+        # Always permit DHCP; otherwise computers can not get
+        # new IP addresses.
+        chain.table.refresh()
+        subprocess.call(["iptables", "-t", "nat", "-A", chain.name, "-p", "udp",
+            "--dport", "67:68", "--sport", "67:68", "-j", "ACCEPT"])
+        chain.table.refresh()
 
         # Define Tor enabled chain.
         tor_name = "TOR-ENABLED"

@@ -4,7 +4,6 @@
 # vim: set autoindent:
 
 from __future__ import division
-import iptc
 import time
 import sqlite3
 import atexit
