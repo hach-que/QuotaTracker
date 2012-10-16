@@ -32,6 +32,7 @@ commands["computer"] = ComputerCommand()
 commands["quota"] = QuotaCommand()
 commands["tor"] = TorCommand()
 commands["reset"] = ResetCommand()
+commands["ports"] = PortsCommand()
 
 # Main loop.
 print "Quota management system - control program"

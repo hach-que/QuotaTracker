@@ -29,17 +29,24 @@ class DatabaseNetwork(object):
         c = conn.cursor()
         import socket
         l = list()
-        for row in c.execute("""SELECT a.hostname, a.person, a.quota, u.bytes, a.use_tor
+        for row in c.execute("""SELECT a.hostname, a.person, a.quota, u.bytes, a.use_tor, GROUP_CONCAT(p.ports)
                                 FROM computers AS a
                                 LEFT JOIN usage AS u
                                     ON u.computer_id = a.rowid
-                                    AND u.end_time > ? - a.period""", (time.time(),)):
+                                    AND u.end_time > ? - a.period
+                                LEFT JOIN ports AS p
+                                    ON p.computer_id = a.rowid
+                                GROUP BY a.rowid""", (time.time(),)):
             try:
                 hostname = row[0]
                 person = row[1]
                 quota = row[2]
                 usage = row[3]
                 tor = row[4]
+                if row[5] == None:
+                    ports = list()
+                else:
+                    ports = row[5].split(',')
                 if usage == None:
                     usage = 0
                 over = usage > quota
@@ -47,11 +54,12 @@ class DatabaseNetwork(object):
                 v = socket.gethostbyname_ex(hostname)[2]
                 for k in v:
                     if (person != None and person.strip != ""):
-                        l.append((k, person.upper(), hostname, over, tor))
+                        l.append((k, person.upper(), hostname, over, tor, ports))
                     else:
-                        l.append((k, k, hostname, over, tor))
+                        l.append((k, k, hostname, over, tor, ports))
             except Exception:
-                #l.append(("UNKNOWN", "UNKNOWN", hostname, over, tor))
+                print "Unable to handle hostname %s" % row[0]
+                #l.append(("UNKNOWN", "UNKNOWN", hostname, over, tor, ports))
                 pass
         del socket
         c.close()
@@ -222,6 +230,39 @@ class DatabaseNetwork(object):
         drop_rule.target = iptc.Target(drop_rule, "DROP")
         chain.append_rule(drop_rule)
 
+    def apply_port_rules(self, chain):
+        computers = self.get_computers()
+        subprocess.call(["iptables", "-t", chain.table.name, "-F"])
+        chain.table.refresh()
+        for i in computers:
+            ip = i[0]
+            person = i[1]
+            hostname = i[2]
+            over = i[3]
+            tor = i[4]
+            ports = i[5]
+ 
+            for p in ports:
+                if (p.find('-') == -1):
+                    # Single port.
+                    pp = p
+                else:
+                    # Port range.
+                    start = p.split('-', 2)[0]
+                    end = p.split('-', 2)[1]
+                    pp = start + ":" + end
+                subprocess.call(["iptables", "-t", chain.table.name, "-A", chain.name, "-p", "udp", "-d", ip + "/255.255.255.255", "--dport", pp, "-j", "DROP"])
+                subprocess.call(["iptables", "-t", chain.table.name, "-A", chain.name, "-p", "udp", "-s", ip + "/255.255.255.255", "--sport", pp, "-j", "DROP"])
+                subprocess.call(["iptables", "-t", chain.table.name, "-A", chain.name, "-p", "tcp", "-d", ip + "/255.255.255.255", "--dport", pp, "-j", "DROP"])
+                subprocess.call(["iptables", "-t", chain.table.name, "-A", chain.name, "-p", "tcp", "-s", ip + "/255.255.255.255", "--sport", pp, "-j", "DROP"])
+                subprocess.call(["iptables", "-t", chain.table.name, "-A", chain.name, "-p", "udp", "-s", ip + "/255.255.255.255", "--dport", pp, "-j", "DROP"])
+                subprocess.call(["iptables", "-t", chain.table.name, "-A", chain.name, "-p", "udp", "-d", ip + "/255.255.255.255", "--sport", pp, "-j", "DROP"])
+                subprocess.call(["iptables", "-t", chain.table.name, "-A", chain.name, "-p", "tcp", "-s", ip + "/255.255.255.255", "--dport", pp, "-j", "DROP"])
+                subprocess.call(["iptables", "-t", chain.table.name, "-A", chain.name, "-p", "tcp", "-d", ip + "/255.255.255.255", "--sport", pp, "-j", "DROP"])
+
+        subprocess.call(["iptables", "-t", chain.table.name, "-A", chain.name, "-j", "ACCEPT"])
+        chain.table.refresh()
+
 class Computer(object):
     """Describes a computer in the network."""
     def __init__(self, ip):
@@ -230,6 +271,7 @@ class Computer(object):
 # Set autocommit to false.
 iptc.TABLE_MANGLE.autocommit = True
 iptc.TABLE_NAT.autocommit = True
+iptc.TABLE_FILTER.autocommit = True
 
 # Define machines.
 internal_network = DatabaseNetwork()
@@ -245,6 +287,8 @@ while True:
     chain = iptc.Chain(iptc.TABLE_MANGLE, "FORWARD")
     internal_network.rescan_quotas(chain)
     internal_network.apply_quota_rules(chain)
+    chain = iptc.Chain(iptc.TABLE_FILTER, "FORWARD")
+    internal_network.apply_port_rules(chain)
     try:
         iptc.TABLE_MANGLE.refresh()
     except iptc.IPTCError, e:

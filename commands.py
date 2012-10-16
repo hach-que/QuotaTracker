@@ -45,6 +45,12 @@ class ResetCommand(Command):
                 end_time INTEGER,
                 bytes INTEGER
             )""")
+        c.execute("""
+            CREATE TABLE port
+            (
+                computer_id INTEGER,
+                ports TEXT
+            )""")
         conn.commit()
 
 # Computer command.
@@ -160,12 +166,97 @@ class QuotaCommand(Command):
             conn.commit()
             print "Reset all quota timers and archived existing usage."
 
+# Ports command.
+class PortsCommand(Command):
+    def handle(self, conn, c, args):
+        if (len(args) == 0 or args[0].lower() == "help"):
+            print "list - Show list of blocking outgoing and incoming ports."
+            print "block <hostname> <ports> - Block a port or series of ports for a computer."
+            print "unblock <hostname> <ports> - Unblock ports for a computer."
+            print "Ports can be specified as a single port like 5600, or a range of ports"
+            print "in the form of 5000-6000."
+        elif (args[0].lower() == "list"):
+            computers = list()
+            at_least_one = False
+            for i in c.execute("SELECT rowid, hostname FROM computers"):
+                computers.append((i[0], i[1]));
+            for i in computers:
+                ports = list()
+                for a in c.execute("SELECT ports FROM ports WHERE computer_id = ?", (i[0],)):
+                    ports.append(a)
+                if len(ports) > 0:
+                    at_least_one = True
+                    print "%s has the following ports blocked:" % (i[1])
+                    for z in ports:
+                        print " - %s" % (z)
+            if at_least_one:
+                print "All other computers have no ports blocked."
+            else:
+                print "No computers have ports blocked."
+        elif (args[0].lower() == "block" and len(args[0]) > 2):
+            computers = list()
+            at_least_one = False
+            for i in c.execute("SELECT rowid, hostname FROM computers WHERE LOWER(hostname) = ?", (args[1],)):
+                computers.append((i[0], i[1]));
+            if len(computers) == 0:
+                print "No such hostname."
+                return
+            elif len(computers) != 1:
+                print "Hostname is ambigious."
+                return
+            computer = computers[0]
+            for i in args[2:]:
+                if (i.find('-') == -1):
+                    try:
+                        p = int(i)
+                        c.execute("INSERT INTO ports (computer_id, ports) VALUES (?, ?)", (computer[0], str(p)))
+                        conn.commit()
+                    except:
+                        print "Invalid port specifier \"%s\"" % i
+                else:
+                    try:
+                        start = int(i.split('-', 2)[0])
+                        end = int(i.split('-', 2)[1])
+                        c.execute("INSERT INTO ports (computer_id, ports) VALUES (?, ?)", (computer[0], str(start) + "-" + str(end)))
+                        conn.commit()
+                    except:
+                        print "Invalid port specifier \"%s\"" % i
+        elif (args[0].lower() == "unblock" and len(args[0]) > 2):
+            computers = list()
+            at_least_one = False
+            for i in c.execute("SELECT rowid, hostname FROM computers WHERE LOWER(hostname) = ?", (args[1],)):
+                computers.append((i[0], i[1]));
+            if len(computers) == 0:
+                print "No such hostname."
+                return
+            elif len(computers) != 1:
+                print "Hostname is ambigious."
+                return
+            computer = computers[0]
+            for i in args[2:]:
+                if (i.find('-') == -1):
+                    try:
+                        p = int(i)
+                        c.execute("DELETE FROM ports WHERE computer_id = ? AND ports = ?", (computer[0], str(p)))
+                        conn.commit()
+                    except:
+                        print "Invalid port specifier \"%s\"" % i
+                else:
+                    try:
+                        start = int(i.split('-', 2)[0])
+                        end = int(i.split('-', 2)[1])
+                        c.execute("DELETE FROM ports WHERE computer_id = ? AND ports = ?", (computer[0], str(start) + "-" + str(end)))
+                        conn.commit()
+                    except:
+                        print "Invalid port specifier \"%s\"" % i
+
 # Help command.
 class HelpCommand(Command):
     def handle(self, conn, c, args):
         print "reset - Clears and recreates the database."
         print "computer - Control computers."
         print "quota - Control quotas."
-        print "tor - Configure transparent Tor." 
+        print "tor - Configure transparent Tor."
+        print "ports - Configure port blocking."
         print "help - This help."
         print "quit - Quits the control program."
